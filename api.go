@@ -6,13 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/max-messenger/max-bot-api-client-go/configservice"
@@ -20,10 +19,13 @@ import (
 )
 
 const (
-	defaultTimeout = 120
-	defaultPause   = 1
+	defaultTimeout   = 120
+	defaultPause     = 1
+	defaultBotAPIUrl = "https://botapi.max.ru/"
 
-	maxRetries    = 3
+	version = "1.2.5"
+
+	maxRetries = 3
 )
 
 // Api implements main part of Max Bot API
@@ -42,12 +44,12 @@ type Api struct {
 
 // New Max Bot Api object
 func New(key string) *Api {
-	u, err := url.Parse("https://botapi.max.ru/")
+	u, err := url.Parse(defaultBotAPIUrl)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 
-	cl := newClient(key, "1.2.5", u, &http.Client{Timeout: time.Duration(defaultTimeout) * time.Second})
+	cl := newClient(key, version, u, &http.Client{Timeout: time.Duration(defaultTimeout) * time.Second})
 	return &Api{
 		Bots:          newBots(cl),
 		Chats:         newChats(cl),
@@ -57,7 +59,7 @@ func New(key string) *Api {
 		Debugs:        newDebugs(cl, 0),
 		client:        cl,
 		timeout:       defaultTimeout,
-		pause:         1,
+		pause:         defaultPause,
 	}
 }
 
@@ -88,7 +90,7 @@ func NewFormConfig(cfg configservice.ConfigInterface) *Api {
 		Debugs:        newDebugs(cl, cfg.GetDebugLogChat()),
 		client:        cl,
 		timeout:       timeout,
-		pause:         1,
+		pause:         defaultPause,
 		debug:         cfg.GetDebugLogMode(),
 	}
 }
@@ -211,7 +213,7 @@ func (a *Api) getUpdates(ctx context.Context, limit int, timeout int, marker int
 			values.Add("types", t)
 		}
 	}
-	
+
 	body, err := a.client.requestWithContext(ctx, http.MethodGet, "updates", values, false, nil)
 	if err != nil {
 		if err == errLongPollTimeout {
@@ -224,39 +226,39 @@ func (a *Api) getUpdates(ctx context.Context, limit int, timeout int, marker int
 			log.Printf("Error closing response body: %v", err)
 		}
 	}()
-	
-	jb, err := ioutil.ReadAll(body)
+
+	jb, err := io.ReadAll(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	
+
 	if err := json.Unmarshal(jb, result); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal updates: %w", err)
 	}
-	
+
 	return result, nil
 }
 
 func (a *Api) getUpdatesWithRetry(ctx context.Context, limit int, timeout int, marker int64, types []string) (*schemes.UpdateList, error) {
 	var result *schemes.UpdateList
 	var lastErr error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
-		
+
 		result, lastErr = a.getUpdates(ctx, limit, timeout, marker, types)
 		if lastErr == nil || lastErr == errLongPollTimeout {
 			return result, lastErr
 		}
-		
+
 		if attempt < maxRetries-1 {
-			retryWait := time.Duration(1<<attempt)
+			retryWait := time.Duration(1 << attempt)
 			log.Printf("Attempt %d failed, retrying in %v: %v", attempt+1, retryWait, lastErr)
-			
+
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -264,7 +266,7 @@ func (a *Api) getUpdatesWithRetry(ctx context.Context, limit int, timeout int, m
 			}
 		}
 	}
-	
+
 	return nil, fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
 }
 
@@ -290,7 +292,7 @@ func (a *Api) GetUpdates(ctx context.Context) chan schemes.UpdateInterface {
 							break
 						}
 					}
-					
+
 					if upds == nil || len(upds.Updates) == 0 {
 						break
 					}
@@ -317,7 +319,7 @@ func (a *Api) GetHandler(updates chan interface{}) http.HandlerFunc {
 				log.Println(err)
 			}
 		}()
-		b, _ := ioutil.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body)
 		updates <- a.bytesToProperUpdate(b)
 	}
 }
