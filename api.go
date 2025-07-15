@@ -25,6 +25,8 @@ const (
 	defaultAPIURL   = "https://botapi.max.ru/"
 	defaultPause    = 1 * time.Second
 	maxUpdatesLimit = 50
+
+	maxRetries = 3
 )
 
 // Api represents the MAX Bot API client
@@ -301,7 +303,7 @@ func (a *Api) getUpdates(ctx context.Context, params *UpdatesParams) (*schemes.U
 
 	defer func() {
 		if closeErr := body.Close(); closeErr != nil {
-			// Log error but don't override the main error
+			log.Printf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -316,6 +318,34 @@ func (a *Api) getUpdates(ctx context.Context, params *UpdatesParams) (*schemes.U
 	}
 
 	return result, nil
+}
+
+func (a *Api) getUpdatesWithRetry(ctx context.Context, params *UpdatesParams) (*schemes.UpdateList, error) {
+	if params == nil {
+		params = &UpdatesParams{}
+	}
+
+	var result *schemes.UpdateList
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		result, lastErr = a.getUpdates(ctx, params)
+		if lastErr == nil {
+			return result, nil
+		}
+
+		if attempt < maxRetries-1 {
+			retryWait := time.Duration(1<<uint(attempt)) * time.Second
+			log.Printf("Attempt %d failed, retrying in %v: %v", attempt+1, retryWait, lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryWait):
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
 }
 
 // GetUpdates returns a channel that delivers updates from the API
@@ -334,38 +364,39 @@ func (a *Api) GetUpdates(ctx context.Context) <-chan schemes.UpdateInterface {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				params := &UpdatesParams{
-					Limit:   maxUpdatesLimit,
-					Timeout: a.timeout,
-					Marker:  marker,
-				}
+				for {
+					params := &UpdatesParams{
+						Limit:   maxUpdatesLimit,
+						Timeout: a.timeout,
+						Marker:  marker,
+					}
 
-				updateList, err := a.getUpdates(ctx, params)
-				if err != nil {
-					log.Printf("failed to get updates: %v", err)
-
-					continue
-				}
-
-				if len(updateList.Updates) == 0 {
-					continue
-				}
-
-				for _, rawUpdate := range updateList.Updates {
-					update, err := a.bytesToProperUpdate(rawUpdate)
+					updateList, err := a.getUpdatesWithRetry(ctx, params)
 					if err != nil {
-						continue
+						log.Printf("failed to get updates: %v", err)
+						break
 					}
 
-					select {
-					case ch <- update:
-					case <-ctx.Done():
-						return
+					if len(updateList.Updates) == 0 {
+						break
 					}
-				}
 
-				if updateList.Marker != nil {
-					marker = *updateList.Marker
+					for _, rawUpdate := range updateList.Updates {
+						update, err := a.bytesToProperUpdate(rawUpdate)
+						if err != nil {
+							continue
+						}
+
+						select {
+						case ch <- update:
+						case <-ctx.Done():
+							return
+						}
+					}
+
+					if updateList.Marker != nil {
+						marker = *updateList.Marker
+					}
 				}
 			}
 		}
