@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,26 +25,38 @@ func TestNewWithConfig(t *testing.T) {
 		setupMock func(*mocks.MockConfigInterface)
 		err       error
 	}{
-		{"nil config", nil, ErrEmptyToken},
-		{"empty token", func(m *mocks.MockConfigInterface) {
-			m.EXPECT().BotTokenCheckString().Return("")
-		}, ErrEmptyToken},
-		{"valid config", func(m *mocks.MockConfigInterface) {
-			m.EXPECT().BotTokenCheckString().Return("test_token")
-			m.EXPECT().GetHttpBotAPITimeOut().Return(10)
-			m.EXPECT().GetHttpBotAPIUrl().Return("https://test.com/")
-			m.EXPECT().GetHttpBotAPIVersion().Return("1.0")
-			m.EXPECT().GetDebugLogMode().Return(true)
-			m.EXPECT().GetDebugLogChat().Return(int64(123))
-		}, nil},
-		{"invalid url", func(m *mocks.MockConfigInterface) {
-			m.EXPECT().BotTokenCheckString().Return("test")
-			m.EXPECT().GetHttpBotAPITimeOut().Return(10)
-			m.EXPECT().GetHttpBotAPIUrl().Return("invalid")
-			m.EXPECT().GetHttpBotAPIVersion().Return("1.0")
-			m.EXPECT().GetDebugLogMode().Return(false)
-			m.EXPECT().GetDebugLogChat().Return(int64(0))
-		}, ErrInvalidURL},
+		{
+			name: "nil config",
+			err:  fmt.Errorf("config is nil"),
+		},
+		{
+			name: "empty token",
+			setupMock: func(m *mocks.MockConfigInterface) {
+				m.EXPECT().BotTokenCheckString().Return("")
+			},
+			err: ErrEmptyToken,
+		},
+		{
+			name: "valid config",
+			setupMock: func(m *mocks.MockConfigInterface) {
+				m.EXPECT().BotTokenCheckString().Return("test_token")
+				m.EXPECT().GetHttpBotAPITimeOut().Return(10)
+				m.EXPECT().GetHttpBotAPIUrl().Return("https://test.com/")
+				m.EXPECT().GetHttpBotAPIVersion().Return("1.0")
+				m.EXPECT().GetDebugLogMode().Return(true)
+				m.EXPECT().GetDebugLogChat().Return(int64(123))
+			},
+			err: nil,
+		},
+		{
+			name: "invalid url",
+			setupMock: func(m *mocks.MockConfigInterface) {
+				m.EXPECT().BotTokenCheckString().Return("test")
+				m.EXPECT().GetHttpBotAPITimeOut().Return(10)
+				m.EXPECT().GetHttpBotAPIUrl().Return("http://[::1]:namedport")
+			},
+			err: ErrInvalidURL,
+		},
 	}
 
 	for _, tt := range tests {
@@ -57,7 +71,16 @@ func TestNewWithConfig(t *testing.T) {
 				cfg = mockCfg
 			}
 			_, err := NewWithConfig(cfg)
-			require.Equal(t, tt.err, err)
+			if tt.err != nil {
+				require.Error(t, err)
+				if tt.name == "nil config" {
+					require.Equal(t, tt.err.Error(), err.Error())
+				} else {
+					require.ErrorIs(t, err, tt.err)
+				}
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }
@@ -70,7 +93,7 @@ func TestBytesToProperUpdate(t *testing.T) {
 		name       string
 		data       func(t *testing.T) []byte
 		wantType   reflect.Type
-		wantErr    bool
+		err        error
 		wantUpdate schemes.UpdateInterface
 	}{
 		{
@@ -98,9 +121,9 @@ func TestBytesToProperUpdate(t *testing.T) {
 			},
 		},
 		{
-			name:    "unknown type",
-			data:    func(t *testing.T) []byte { return mustMarshal(t, schemes.Update{UpdateType: "unknown"}) },
-			wantErr: true,
+			name: "unknown type",
+			data: func(t *testing.T) []byte { return mustMarshal(t, schemes.Update{UpdateType: "unknown"}) },
+			err:  fmt.Errorf("unknown update type: unknown"),
 		},
 		{
 			name: "bot added",
@@ -124,10 +147,12 @@ func TestBytesToProperUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data := tt.data(t)
 			got, err := api.bytesToProperUpdate(data)
-			if tt.wantErr {
+			if tt.err != nil {
 				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.err.Error())
 				return
 			}
+
 			require.NoError(t, err)
 			require.Equal(t, tt.wantType, reflect.TypeOf(got))
 			require.Equal(t, tt.wantUpdate, got)
@@ -195,11 +220,25 @@ func TestGetUpdates(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/updates", r.URL.Path)
-		updateList := schemes.UpdateList{
-			Updates: []json.RawMessage{json.RawMessage(updateJSON)},
-			Marker:  new(int64),
+
+		markerStr := r.URL.Query().Get("marker")
+		marker, _ := strconv.ParseInt(markerStr, 10, 64)
+
+		var updateList schemes.UpdateList
+		if marker == 0 {
+			updateList = schemes.UpdateList{
+				Updates: []json.RawMessage{json.RawMessage(updateJSON)},
+				Marker:  new(int64),
+			}
+			*updateList.Marker = 1
+		} else {
+			updateList = schemes.UpdateList{
+				Updates: []json.RawMessage{},
+				Marker:  new(int64),
+			}
+			*updateList.Marker = marker
 		}
-		*updateList.Marker = 1
+
 		json.NewEncoder(w).Encode(updateList)
 	}))
 	defer server.Close()
@@ -236,7 +275,7 @@ func TestGetUpdates(t *testing.T) {
 func TestGetHandler(t *testing.T) {
 	api, err := New("test")
 	require.NoError(t, err)
-	
+
 	ch := make(chan schemes.UpdateInterface, 1)
 	handler := api.GetHandler(ch)
 
