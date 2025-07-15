@@ -3,7 +3,6 @@ package maxbot
 import (
 	"bytes"
 	"context"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -78,7 +77,7 @@ func (cl *client) requestReader(ctx context.Context, method, path string, query 
 	if !reset {
 		query.Set("access_token", cl.key)
 	}
-	
+
 	query.Set("v", cl.version)
 	u.RawQuery = query.Encode()
 
