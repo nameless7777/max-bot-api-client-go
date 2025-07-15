@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/max-messenger/max-bot-api-client-go/schemes"
 )
@@ -186,8 +187,8 @@ func (a *messages) checkUser(ctx context.Context, reset bool, message *schemes.N
 	}
 	mode := "notify/exists"
 
-	if message.Text != "" {
-		values.Set("text", message.Text)
+	if message.PhoneNumbers != nil {
+		values.Set("phone_numbers", strings.Join(message.PhoneNumbers, ","))
 	}
 
 	body, err := a.client.request(ctx, http.MethodGet, mode, values, reset, nil)
@@ -195,12 +196,15 @@ func (a *messages) checkUser(ctx context.Context, reset bool, message *schemes.N
 		return false, err
 	}
 	defer body.Close()
+
 	if err := json.NewDecoder(body).Decode(result); err != nil {
 		// Message sent without errors
 		return false, err
 	}
+
 	if len(result.NumberExist) > 0 {
 		return true, result
 	}
+	
 	return false, result
 }
