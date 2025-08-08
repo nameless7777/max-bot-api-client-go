@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/max-messenger/max-bot-api-client-go/schemes"
+	"github.com/nameless7777/max-bot-api-client-go/schemes"
 )
 
 type messages struct {
@@ -205,6 +205,6 @@ func (a *messages) checkUser(ctx context.Context, reset bool, message *schemes.N
 	if len(result.NumberExist) > 0 {
 		return true, result
 	}
-	
+
 	return false, result
 }

@@ -9,9 +9,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"time"
 
-	"github.com/max-messenger/max-bot-api-client-go/schemes"
+	"github.com/nameless7777/max-bot-api-client-go/schemes"
 )
 
 var (

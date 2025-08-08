@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/max-messenger/max-bot-api-client-go/schemes"
+	"github.com/nameless7777/max-bot-api-client-go/schemes"
 )
 
 type uploads struct {
